@@ -12,10 +12,10 @@ load_dotenv()
 
 # Debug: Print environment variables
 discord_token = os.getenv('DISCORD_TOKEN')
-channel_id = os.getenv('CHANNEL_ID')
+channel_ids = os.getenv('CHANNEL_IDS', '').split(',')  # Split comma-separated channel IDs
 rapidapi_key = os.getenv('RAPIDAPI_KEY')
 print(f"Discord Token loaded: {'Yes' if discord_token else 'No'}")
-print(f"Channel ID loaded: {'Yes' if channel_id else 'No'}")
+print(f"Channel IDs loaded: {len(channel_ids)} channels")
 print(f"RapidAPI Key loaded: {'Yes' if rapidapi_key else 'No'}")
 
 # Initialize Discord bot and global variables
@@ -195,28 +195,44 @@ def search_internships(data, query):
     matches.sort(key=lambda x: x.get('postedDate', x.get('posted_date', '')), reverse=True)
     return matches
 
+async def send_to_channels(channels, message, embeds=None):
+    """Helper function to send messages to multiple channels"""
+    for channel_id in channels:
+        try:
+            channel = bot.get_channel(int(channel_id))
+            if not channel:
+                try:
+                    channel = await bot.fetch_channel(int(channel_id))
+                except discord.NotFound:
+                    print(f"Could not find channel with ID {channel_id}")
+                    continue
+                except discord.Forbidden:
+                    print(f"No permission for channel {channel_id}")
+                    continue
+                except Exception as e:
+                    print(f"Error fetching channel {channel_id}: {e}")
+                    continue
+            
+            # Send the initial message
+            await channel.send(message)
+            
+            # Send embeds if provided
+            if embeds:
+                for embed in embeds:
+                    await channel.send(embed=embed)
+                    await asyncio.sleep(1)  # Small delay between messages to avoid rate limits
+                    
+        except Exception as e:
+            print(f"Error sending message to channel {channel_id}: {e}")
+
 @tasks.loop(minutes=30)  # Check for new internships every 30 minutes
 async def check_internships():
     """Periodically check for new internships and post them"""
-    if not channel_id:
-        print("No channel ID configured!")
+    if not channel_ids:
+        print("No channel IDs configured!")
         return
         
     try:
-        channel = bot.get_channel(int(channel_id))
-        if not channel:
-            try:
-                channel = await bot.fetch_channel(int(channel_id))
-            except discord.NotFound:
-                print(f"Could not find channel with ID {channel_id}")
-                return
-            except discord.Forbidden:
-                print(f"No permission for channel {channel_id}")
-                return
-            except Exception as e:
-                print(f"Error fetching channel {channel_id}: {e}")
-                return
-            
         # Fetch the data with rate limiting
         print("Fetching internship data...")
         data = fetch_internships()
@@ -226,15 +242,10 @@ async def check_internships():
             sorted_data = sorted(data, key=lambda x: x.get('posted_date', ''), reverse=True)
             embeds = format_internship_embed(sorted_data)
             
-            # Send initial message
-            await channel.send(f"📢 Found {len(embeds)} new internship opportunities!")
-            
-            # Send each embed as a separate message
-            for embed in embeds:
-                await channel.send(embed=embed)
-                await asyncio.sleep(1)  # Small delay between messages to avoid rate limits
+            # Send to all channels
+            await send_to_channels(channel_ids, f"📢 Found {len(embeds)} new internship opportunities!", embeds)
                 
-            print(f"Successfully sent internship updates to channel {channel_id}")
+            print(f"Successfully sent internship updates to {len(channel_ids)} channels")
         else:
             print("No internship opportunities found at the moment.")
             
@@ -584,11 +595,11 @@ async def linkedin_jobs(ctx, *, query: str = None):
 
 # Run the bot
 if __name__ == "__main__":
-    if discord_token and channel_id:
+    if discord_token and channel_ids:
         print("Starting bot...")
         bot.run(discord_token)
     else:
         if not discord_token:
             print("Please provide your Discord token in the .env file.")
-        if not channel_id:
-            print("Please provide your channel ID in the .env file.") 
+        if not channel_ids:
+            print("Please provide your channel IDs in the .env file (comma-separated).") 
