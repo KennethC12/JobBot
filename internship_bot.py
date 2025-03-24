@@ -10,19 +10,18 @@ from datetime import datetime
 # Load environment variables
 load_dotenv()
 
-# Debug: Print environment variables
-discord_token = os.getenv('DISCORD_TOKEN')
-channel_ids = os.getenv('CHANNEL_IDS', '').split(',')  # Split comma-separated channel IDs
-rapidapi_key = os.getenv('RAPIDAPI_KEY')
-print(f"Discord Token loaded: {'Yes' if discord_token else 'No'}")
-print(f"Channel IDs loaded: {len(channel_ids)} channels")
-print(f"RapidAPI Key loaded: {'Yes' if rapidapi_key else 'No'}")
+# Get Discord token and channel ID from environment variables
+DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
+CHANNEL_IDS = [int(channel_id.strip()) for channel_id in os.getenv('CHANNEL_IDS', '').split(',') if channel_id.strip()]
 
-# Initialize Discord bot and global variables
+# Debug: Print environment variables (without sensitive data)
+print(f"Discord Token loaded: {'Yes' if DISCORD_TOKEN else 'No'}")
+print(f"Channel IDs loaded: {'Yes' if CHANNEL_IDS else 'No'}")
+print(f"RapidAPI Key loaded: {'Yes' if os.getenv('RAPIDAPI_KEY') else 'No'}")
+
+# Create bot instance
 intents = discord.Intents.default()
 intents.message_content = True
-intents.guilds = True
-intents.messages = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 # Rate limiting configuration
@@ -195,206 +194,173 @@ def search_internships(data, query):
     matches.sort(key=lambda x: x.get('postedDate', x.get('posted_date', '')), reverse=True)
     return matches
 
-async def send_to_channels(channels, message, embeds=None):
-    """Helper function to send messages to multiple channels"""
-    for channel_id in channels:
-        try:
-            channel = bot.get_channel(int(channel_id))
-            if not channel:
-                try:
-                    channel = await bot.fetch_channel(int(channel_id))
-                except discord.NotFound:
-                    print(f"Could not find channel with ID {channel_id}")
-                    continue
-                except discord.Forbidden:
-                    print(f"No permission for channel {channel_id}")
-                    continue
-                except Exception as e:
-                    print(f"Error fetching channel {channel_id}: {e}")
-                    continue
-            
-            # Send the initial message
-            await channel.send(message)
-            
-            # Send embeds if provided
-            if embeds:
-                for embed in embeds:
-                    await channel.send(embed=embed)
-                    await asyncio.sleep(1)  # Small delay between messages to avoid rate limits
-                    
-        except Exception as e:
-            print(f"Error sending message to channel {channel_id}: {e}")
-
-@tasks.loop(minutes=30)  # Check for new internships every 30 minutes
+@tasks.loop(minutes=30)
 async def check_internships():
-    """Periodically check for new internships and post them"""
-    if not channel_ids:
-        print("No channel IDs configured!")
-        return
-        
+    """Check for new internships every 30 minutes"""
     try:
-        # Fetch the data with rate limiting
         print("Fetching internship data...")
-        data = fetch_internships()
+        internships = fetch_internships()
         
-        if isinstance(data, list) and len(data) > 0:
-            # Sort by posting date to show most recent first
-            sorted_data = sorted(data, key=lambda x: x.get('posted_date', ''), reverse=True)
-            embeds = format_internship_embed(sorted_data)
+        if internships:
+            print(f"Found {len(internships)} internships")
+            embeds = format_internship_embed(internships)
             
-            # Send to all channels
-            await send_to_channels(channel_ids, f"📢 Found {len(embeds)} new internship opportunities!", embeds)
-                
-            print(f"Successfully sent internship updates to {len(channel_ids)} channels")
+            # Send to all specified channels
+            for channel_id in CHANNEL_IDS:
+                try:
+                    channel = bot.get_channel(channel_id)
+                    if channel:
+                        # Send initial message
+                        await channel.send(f"🔍 Found {len(embeds)} new internship opportunities!")
+                        
+                        # Send each embed as a separate message
+                        for embed in embeds:
+                            await channel.send(embed=embed)
+                            await asyncio.sleep(1)  # Small delay between messages to avoid rate limits
+                    else:
+                        print(f"Could not find channel with ID: {channel_id}")
+                except Exception as e:
+                    print(f"Error sending message to channel {channel_id}: {str(e)}")
         else:
-            print("No internship opportunities found at the moment.")
+            print("No new internships found")
             
     except Exception as e:
-        print(f"An error occurred while checking internships: {e}")
+        print(f"Error in check_internships: {str(e)}")
+        import traceback
+        print(f"Full traceback: {traceback.format_exc()}")
 
 @bot.event
 async def on_ready():
-    """When the bot is ready, start the internship checking loop"""
-    print(f'{bot.user} has connected to Discord!')
-    if not check_internships.is_running():
-        check_internships.start()
+    """Called when the bot is ready and connected to Discord"""
+    print(f"{bot.user.name} has connected to Discord!")
+    
+    # Start the internship checking loop
+    check_internships.start()
 
 @bot.command(name='internships')
-async def get_internships(ctx, limit: int = 25):
-    """
-    Manual command to fetch internships
-    Usage: !internships [number]
-    Example: !internships 30
-    """
+async def get_internships(ctx):
+    """Show all available internships"""
     try:
-        # Validate limit
-        limit = max(1, min(limit, 50))  # Keep limit between 1 and 50
-        
+        # Check if the command is used in an allowed channel
+        if ctx.channel.id not in CHANNEL_IDS:
+            return
+            
         # Send a loading message
-        loading_msg = await ctx.send(f"Fetching {limit} internship opportunities...")
+        loading_msg = await ctx.send("Fetching internships...")
         
-        # Fetch the data with rate limiting
-        data = fetch_internships()
+        # Fetch internships
+        internships = fetch_internships()
         
         # Delete the loading message
         await loading_msg.delete()
         
-        if isinstance(data, list) and len(data) > 0:
-            embeds = format_internship_embed(data, limit=limit)
+        if internships:
+            embeds = format_internship_embed(internships)
             
             # Send initial message
-            await ctx.send(f"📢 Found {len(embeds)} internship opportunities!")
+            await ctx.send(f"🔍 Found {len(embeds)} internship opportunities!")
             
             # Send each embed as a separate message
             for embed in embeds:
                 await ctx.send(embed=embed)
                 await asyncio.sleep(1)  # Small delay between messages to avoid rate limits
         else:
-            await ctx.send("No internship opportunities found at the moment.")
+            await ctx.send("No internships found at the moment.")
             
     except Exception as e:
-        await ctx.send(f"An error occurred: {str(e)}")
+        await ctx.send(f"An error occurred while fetching internships: {str(e)}")
+        print(f"Error in get_internships command: {str(e)}")
+        import traceback
+        print(f"Full traceback: {traceback.format_exc()}")
 
 @bot.command(name='search')
-async def search(ctx, *, query: str, limit: int = 25):
-    """
-    Search for internships by company name, title, or location
-    Usage: !search <query> [number]
-    Example: !search google 30
-    Example: !search software engineer 20
-    Example: !search remote 15
-    """
+async def search(ctx, *, query: str):
+    """Search for internships by keyword"""
     try:
-        # Extract limit if provided at the end of the query
-        parts = query.split()
-        if parts[-1].isdigit():
-            limit = int(parts[-1])
-            query = ' '.join(parts[:-1])
-        
-        # Validate limit
-        limit = max(1, min(limit, 50))  # Keep limit between 1 and 50
-        
+        # Check if the command is used in an allowed channel
+        if ctx.channel.id not in CHANNEL_IDS:
+            return
+            
         # Send a loading message
-        loading_msg = await ctx.send(f"Searching internships for '{query}' (up to {limit} results)...")
+        loading_msg = await ctx.send(f"Searching for internships matching '{query}'...")
         
-        # Fetch the data with rate limiting
-        data = fetch_internships()
+        # Fetch and filter internships
+        internships = fetch_internships()
+        filtered_internships = search_internships(internships, query)
         
         # Delete the loading message
         await loading_msg.delete()
         
-        if isinstance(data, list) and len(data) > 0:
-            # Search for matching internships
-            matches = search_internships(data, query)
-            
-            if matches:
-                embeds = format_internship_embed(
-                    matches,
-                    title=f"Search Results for '{query}'",
-                    description=f"Found {len(matches)} matching internships (showing most recent first):",
-                    limit=limit
-                )
-                
-                # Send initial message
-                await ctx.send(f"🔍 Found {len(embeds)} internships matching '{query}'!")
-                
-                # Send each embed as a separate message
-                for embed in embeds:
-                    await ctx.send(embed=embed)
-                    await asyncio.sleep(1)  # Small delay between messages to avoid rate limits
-            else:
-                await ctx.send(f"No internships found matching '{query}'.")
-        else:
-            await ctx.send("No internship opportunities found at the moment.")
-            
-    except Exception as e:
-        await ctx.send(f"An error occurred while searching: {str(e)}")
-
-@bot.command(name='recent')
-async def recent(ctx, limit: int = 25):
-    """
-    Show the most recently posted internships
-    Usage: !recent [number]
-    Example: !recent 30
-    """
-    try:
-        # Validate limit
-        limit = max(1, min(limit, 50))  # Keep limit between 1 and 50
-        
-        # Send a loading message
-        loading_msg = await ctx.send(f"Fetching {limit} recent internships...")
-        
-        # Fetch the data with rate limiting
-        data = fetch_internships()
-        
-        # Delete the loading message
-        await loading_msg.delete()
-        
-        if isinstance(data, list) and len(data) > 0:
-            # Sort by posting date
-            sorted_data = sorted(data, key=lambda x: x.get('posted_date', ''), reverse=True)
-            # Apply the limit
-            sorted_data = sorted_data[:limit]
-            
+        if filtered_internships:
             embeds = format_internship_embed(
-                sorted_data,
-                title=f"{limit} Most Recent Internships",
-                description="Here are the latest internship postings:",
-                limit=limit
+                filtered_internships,
+                title=f"Search Results for '{query}'",
+                description=f"Found {len(filtered_internships)} matching internships"
             )
             
             # Send initial message
-            await ctx.send(f"📅 Here are the {len(embeds)} most recent internship postings!")
+            await ctx.send(f"🔍 Found {len(embeds)} internships matching '{query}'!")
             
             # Send each embed as a separate message
             for embed in embeds:
                 await ctx.send(embed=embed)
                 await asyncio.sleep(1)  # Small delay between messages to avoid rate limits
         else:
-            await ctx.send("No internship opportunities found at the moment.")
+            await ctx.send(f"No internships found matching '{query}'.")
             
     except Exception as e:
-        await ctx.send(f"An error occurred: {str(e)}")
+        await ctx.send(f"An error occurred while searching internships: {str(e)}")
+        print(f"Error in search command: {str(e)}")
+        import traceback
+        print(f"Full traceback: {traceback.format_exc()}")
+
+@bot.command(name='recent')
+async def recent(ctx, limit: int = 5):
+    """Show the most recent internships"""
+    try:
+        # Check if the command is used in an allowed channel
+        if ctx.channel.id not in CHANNEL_IDS:
+            return
+            
+        # Validate limit
+        limit = max(1, min(limit, 50))  # Keep limit between 1 and 50
+        
+        # Send a loading message
+        loading_msg = await ctx.send(f"Fetching {limit} most recent internships...")
+        
+        # Fetch and sort internships
+        internships = fetch_internships()
+        sorted_internships = sorted(
+            internships,
+            key=lambda x: x.get('date_posted', ''),
+            reverse=True
+        )[:limit]
+        
+        # Delete the loading message
+        await loading_msg.delete()
+        
+        if sorted_internships:
+            embeds = format_internship_embed(
+                sorted_internships,
+                title=f"Most Recent Internships",
+                description=f"Showing {len(sorted_internships)} most recent opportunities"
+            )
+            
+            # Send initial message
+            await ctx.send(f"🔍 Found {len(embeds)} recent internship opportunities!")
+            
+            # Send each embed as a separate message
+            for embed in embeds:
+                await ctx.send(embed=embed)
+                await asyncio.sleep(1)  # Small delay between messages to avoid rate limits
+        else:
+            await ctx.send("No recent internships found.")
+            
+    except Exception as e:
+        await ctx.send(f"An error occurred while fetching recent internships: {str(e)}")
+        print(f"Error in recent command: {str(e)}")
+        import traceback
+        print(f"Full traceback: {traceback.format_exc()}")
 
 @sleep_and_retry
 @limits(calls=CALLS_PER_MINUTE, period=ONE_MINUTE)
@@ -502,6 +468,10 @@ async def linkedin_jobs(ctx, *, query: str = None):
     !linkedin "developer" "past24h"
     """
     try:
+        # Check if the command is used in an allowed channel
+        if ctx.channel.id not in CHANNEL_IDS:
+            return
+            
         # Check if RapidAPI key is available
         if not os.getenv('RAPIDAPI_KEY'):
             await ctx.send("Error: RapidAPI key not found. Please check your .env file.")
@@ -595,11 +565,11 @@ async def linkedin_jobs(ctx, *, query: str = None):
 
 # Run the bot
 if __name__ == "__main__":
-    if discord_token and channel_ids:
+    if DISCORD_TOKEN and CHANNEL_IDS:
         print("Starting bot...")
-        bot.run(discord_token)
+        bot.run(DISCORD_TOKEN)
     else:
-        if not discord_token:
+        if not DISCORD_TOKEN:
             print("Please provide your Discord token in the .env file.")
-        if not channel_ids:
-            print("Please provide your channel IDs in the .env file (comma-separated).") 
+        if not CHANNEL_IDS:
+            print("Please provide your channel IDs in the .env file.") 
