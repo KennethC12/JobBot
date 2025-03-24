@@ -387,7 +387,7 @@ async def recent(ctx, limit: int = 25):
 
 @sleep_and_retry
 @limits(calls=CALLS_PER_MINUTE, period=ONE_MINUTE)
-def fetch_linkedin_jobs(keywords=None, location=None, limit=25):
+def fetch_linkedin_jobs(keywords=None, location=None, limit=25, time_range="past24h"):
     """Fetch jobs specifically from LinkedIn API"""
     if not os.getenv('RAPIDAPI_KEY'):
         print("Error: RapidAPI key not found in environment variables")
@@ -407,8 +407,8 @@ def fetch_linkedin_jobs(keywords=None, location=None, limit=25):
     querystring = {
         "keywords": keywords or "internship",
         "locationId": "92000000",  # United States
-        "datePosted": "anyTime",
-        "sort": "mostRelevant"
+        "datePosted": time_range,  # Use time_range parameter
+        "sort": "mostRecent"  # Sort by most recent
     }
     
     # Add location to keywords if specified
@@ -483,11 +483,12 @@ def fetch_linkedin_jobs(keywords=None, location=None, limit=25):
 async def linkedin_jobs(ctx, *, query: str = None):
     """
     Show LinkedIn job postings
-    Usage: !linkedin [keywords] [location] [limit]
+    Usage: !linkedin [keywords] [location] [limit] [time_range]
     Examples:
     !linkedin
     !linkedin "software engineer" "boston" 20
     !linkedin "data scientist" "new york" 30
+    !linkedin "developer" "past24h"
     """
     try:
         # Check if RapidAPI key is available
@@ -499,6 +500,7 @@ async def linkedin_jobs(ctx, *, query: str = None):
         keywords = None
         location = None
         limit = 25
+        time_range = "past24h"  # Default to last 24 hours
         
         if query:
             parts = query.split()
@@ -506,6 +508,21 @@ async def linkedin_jobs(ctx, *, query: str = None):
             if parts[-1].isdigit():
                 limit = int(parts[-1])
                 parts = parts[:-1]
+            
+            # Check for time range keywords
+            time_keywords = {
+                "past24h": ["24h", "24hours", "today", "past24h"],
+                "past72h": ["72h", "72hours", "3days", "past72h"],
+                "pastWeek": ["week", "7days", "pastweek"],
+                "pastMonth": ["month", "30days", "pastmonth"],
+                "anyTime": ["any", "all", "anytime"]
+            }
+            
+            for time_key, keywords_list in time_keywords.items():
+                if parts[-1].lower() in keywords_list:
+                    time_range = time_key
+                    parts = parts[:-1]
+                    break
             
             # If we have remaining parts, try to identify location
             if len(parts) >= 2:
@@ -531,10 +548,12 @@ async def linkedin_jobs(ctx, *, query: str = None):
         search_query = f"Searching LinkedIn jobs for '{keywords or 'internship'}'"
         if location:
             search_query += f" in {location}"
+        if time_range != "anyTime":
+            search_query += f" posted in the last {time_range}"
         await ctx.send(f"{search_query}...")
         
         # Fetch LinkedIn jobs
-        jobs = fetch_linkedin_jobs(keywords=keywords, location=location, limit=limit)
+        jobs = fetch_linkedin_jobs(keywords=keywords, location=location, limit=limit, time_range=time_range)
         
         if jobs:
             embeds = format_internship_embed(
@@ -542,7 +561,8 @@ async def linkedin_jobs(ctx, *, query: str = None):
                 title="LinkedIn Job Postings",
                 description=f"Found {len(jobs)} jobs" + 
                           (f" matching '{keywords}'" if keywords else "") +
-                          (f" in {location}" if location else ""),
+                          (f" in {location}" if location else "") +
+                          (f" posted in the last {time_range}" if time_range != "anyTime" else ""),
                 limit=limit
             )
             
@@ -554,7 +574,7 @@ async def linkedin_jobs(ctx, *, query: str = None):
                 await ctx.send(embed=embed)
                 await asyncio.sleep(1)  # Small delay between messages to avoid rate limits
         else:
-            await ctx.send("No jobs found at the moment. Please try different keywords or location.")
+            await ctx.send("No jobs found at the moment. Please try different keywords, location, or time range.")
             
     except Exception as e:
         await ctx.send(f"An error occurred while fetching LinkedIn jobs: {str(e)}")
