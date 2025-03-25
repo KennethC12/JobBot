@@ -10,14 +10,62 @@ from datetime import datetime
 # Load environment variables
 load_dotenv()
 
-# Get Discord token and channel ID from environment variables
-DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
-CHANNEL_IDS = [int(channel_id.strip()) for channel_id in os.getenv('CHANNEL_IDS', '').split(',') if channel_id.strip()]
+# Get Discord token and channel IDs from environment variables with robust parsing
+DISCORD_TOKEN = os.getenv('DISCORD_TOKEN', '').strip()
+
+# Channel ID parsing with support for both single and separate channel IDs
+CHANNEL_IDS = []
+
+# Try to get separate channel IDs first
+primary_channel = os.getenv('PRIMARY_CHANNEL_ID', '').strip()
+secondary_channel = os.getenv('SECONDARY_CHANNEL_ID', '').strip()
+
+print(f"Debug - Primary Channel ID from env: '{primary_channel}'")
+print(f"Debug - Secondary Channel ID from env: '{secondary_channel}'")
+
+# If separate channel IDs are provided, use them
+if primary_channel:
+    try:
+        CHANNEL_IDS.append(int(primary_channel))
+    except ValueError as e:
+        print(f"Error parsing PRIMARY_CHANNEL_ID: {e}")
+
+if secondary_channel:
+    try:
+        CHANNEL_IDS.append(int(secondary_channel))
+    except ValueError as e:
+        print(f"Error parsing SECONDARY_CHANNEL_ID: {e}")
+
+# If no separate channel IDs found, try the combined format
+if not CHANNEL_IDS:
+    channel_ids_str = os.getenv('CHANNEL_IDS', '').strip()
+    print(f"Debug - Combined CHANNEL_IDS from env: '{channel_ids_str}'")
+    
+    if channel_ids_str:
+        try:
+            # Handle different possible formats
+            if ',' in channel_ids_str:
+                # Comma-separated format
+                channel_ids = [cid.strip() for cid in channel_ids_str.split(',')]
+            else:
+                # Single channel ID or space-separated
+                channel_ids = [cid.strip() for cid in channel_ids_str.split()]
+            
+            # Filter out empty strings and convert to integers
+            CHANNEL_IDS = [int(cid) for cid in channel_ids if cid.strip() and cid.strip().isdigit()]
+        except Exception as e:
+            print(f"Error parsing combined channel IDs: {str(e)}")
+
+# Define primary and secondary channels
+PRIMARY_CHANNEL = CHANNEL_IDS[0] if CHANNEL_IDS else None
+SECONDARY_CHANNEL = CHANNEL_IDS[1] if len(CHANNEL_IDS) > 1 else None
 
 # Debug: Print environment variables (without sensitive data)
 print(f"Discord Token loaded: {'Yes' if DISCORD_TOKEN else 'No'}")
-print(f"Channel IDs loaded: {'Yes' if CHANNEL_IDS else 'No'}")
-print(f"RapidAPI Key loaded: {'Yes' if os.getenv('RAPIDAPI_KEY') else 'No'}")
+print(f"Channel IDs parsed: {CHANNEL_IDS}")
+print(f"Primary Channel ID: {PRIMARY_CHANNEL}")
+print(f"Secondary Channel ID: {SECONDARY_CHANNEL}")
+print(f"RapidAPI Key loaded: {'Yes' if os.getenv('RAPIDAPI_KEY', '').strip() else 'No'}")
 
 # Create bot instance
 intents = discord.Intents.default()
